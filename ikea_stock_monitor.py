@@ -12,7 +12,7 @@
 IKEA Chile Stock Monitor
 ========================
 Monitors IKEA Chile product availability and notifies you via Telegram
-when items are back in stock.
+when items are back in stock, or when they go low of stock.
 
 Usage:
     chmod +x ikea_stock_monitor.py
