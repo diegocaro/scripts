@@ -114,6 +114,15 @@ class StockResult:
     store_restock_qty: int
 
 
+@dataclass(frozen=True)
+class StockError:
+    product: Product
+    message: str
+
+
+CheckResult = StockResult | StockError
+
+
 def _log_request(request: httpx.Request):
     logger.debug("→ %s %s", request.method, request.url)
 
@@ -265,7 +274,7 @@ def parse_stock(data: dict) -> StockResult:
     )
 
 
-def check_stock(product: Product, country: str) -> StockResult | None:
+def check_stock(product: Product, country: str) -> CheckResult:
     """Fetch availability from IKEA's Ingka API and parse the response."""
     url = AVAILABILITY_URL.format(country=country, item_no=product.item_no)
     headers = {
@@ -278,12 +287,12 @@ def check_stock(product: Product, country: str) -> StockResult | None:
         error = f"HTTP error: {e}"
         err_console.print(f"[red]{error} for {product.item_no}[/red]")
         send_error_notification(product, error)
-        return None
+        return StockError(product, error)
     except httpx.HTTPError as e:
         error = f"Network error (after retries): {e}"
         err_console.print(f"[red]{error} for {product.item_no}[/red]")
         send_error_notification(product, error)
-        return None
+        return StockError(product, error)
 
     try:
         data = resp.json()
@@ -291,7 +300,7 @@ def check_stock(product: Product, country: str) -> StockResult | None:
         error = f"JSON parse error: {e}"
         err_console.print(f"[red]{error} for {product.item_no}[/red]")
         send_error_notification(product, error)
-        return None
+        return StockError(product, error)
 
     result = parse_stock(data)
     logger.info(
@@ -431,11 +440,15 @@ def run(item_nos: list[str], interval: int):
 
         for product in products:
             result = check_stock(product, CONFIG["country"])
-            if result is None:
-                table.add_row(
-                    product.item_no, product.name, "[red]Error[/red]", "-", "-", "-"
-                )
-                continue
+
+            match result:
+                case StockError():
+                    table.add_row(
+                        product.item_no, product.name, "[red]Error[/red]", "-", "-", "-"
+                    )
+                    continue
+                case StockResult():
+                    pass
 
             was_available = state.get(product.item_no, {}).get("available", False)
             is_available = result.available
@@ -484,9 +497,14 @@ def run_once(item_nos: list[str]):
     for item_no in item_nos:
         product = fetch_product(item_no, CONFIG["country"], CONFIG["language"])
         result = check_stock(product, CONFIG["country"])
-        if result is None:
-            rprint(f"[red]✗ {product.item_no}[/red]: could not fetch stock data")
-            continue
+
+        match result:
+            case StockError(message=msg):
+                rprint(f"[red]✗ {product.item_no}[/red]: {msg}")
+                continue
+            case StockResult():
+                pass
+
         online = (
             "[green]✓ available[/green]"
             if result.online_available
