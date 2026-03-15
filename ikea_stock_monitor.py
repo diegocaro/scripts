@@ -41,7 +41,7 @@ State:
 
 Changelog:
     2026-03-15
-        • Added store_status field to StockResult with HIGH_IN_STOCK/LOW_IN_STOCK/OUT_OF_STOCK
+        • Added _escape_md helper to escape MarkdownV2 special characters in Telegram messages
         • Added store_status field to StockResult with colour-coded display in CLI and state persistence
         • Added --file option to load products from JSON
         • Added --test-telegram option to verify Telegram setup
@@ -121,6 +121,8 @@ INGKA_CLIENT_ID = "ef382663-a2a5-40d4-8afe-f0634821c0ed"
 PRODUCT_URL = "https://www.ikea.com/{country}/{lang}/p/-{item_no}/"
 STATE_FILE = Path.home() / ".ikea_stock_monitor_state.json"
 
+_MARKDOWNV2_SPECIAL = re.compile(r"([_*\[\]()~`>#+\-=|{}.!\\])")
+
 
 @dataclass(frozen=True)
 class Product:
@@ -174,6 +176,11 @@ def _log_response(response: httpx.Response):
         response.url,
         response.headers.get("content-type", ""),
     )
+
+
+def _escape_md(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2."""
+    return _MARKDOWNV2_SPECIAL.sub(r"\\\1", text)
 
 
 _http_client = httpx.Client(
@@ -384,8 +391,8 @@ def check_stock(product: Product, country: str) -> CheckResult:
 def send_error_notification(product: Product, error: str):
     msg = (
         f"⚠️ *IKEA Chile — Error checking stock*\n\n"
-        f"*{product.name}* \\(`{product.item_no}`\\)\n"
-        f"Error: {error}"
+        f"*{_escape_md(product.name)}* \\(`{product.item_no}`\\)\n"
+        f"Error: {_escape_md(error)}"
     )
     try:
         _send_telegram(msg)
@@ -412,7 +419,7 @@ def send_notification(product: Product, result: StockResult):
     )
     msg = (
         f"🛒 *IKEA Chile — Product available\\!*\n\n"
-        f"*{product.name}* \\(`{product.item_no}`\\) is back in stock\\.\n"
+        f"*{_escape_md(product.name)}* \\(`{product.item_no}`\\) is back in stock\\.\n"
         f"Online: *{online}*\n"
         f"Store stock: *{result.store_stock}* units\n"
         f"{restock_line}"
