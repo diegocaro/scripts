@@ -41,6 +41,8 @@ State:
 
 Changelog:
     2026-03-15
+        • Added store_status field to StockResult with HIGH_IN_STOCK/LOW_IN_STOCK/OUT_OF_STOCK
+        • Added store_status field to StockResult with colour-coded display in CLI and state persistence
         • Added --file option to load products from JSON
         • Added --test-telegram option to verify Telegram setup
         • Added --unit-tests flag with comprehensive test suite
@@ -138,8 +140,18 @@ class StockResult:
     online_available: bool
     online_status: str
     store_stock: int
+    store_status: str
     store_restock_date: str | None
     store_restock_qty: int
+
+    @property
+    def store_status_formatted(self) -> str:
+        if "HIGH" in self.store_status or self.store_status == "IN_STOCK":
+            return f"[green]{self.store_status}[/green]"
+        elif "LOW" in self.store_status:
+            return f"[yellow]{self.store_status}[/yellow]"
+        else:
+            return f"[red]{self.store_status}[/red]"
 
 
 @dataclass(frozen=True)
@@ -291,6 +303,20 @@ def parse_stock(data: dict) -> StockResult:
         for e in sto_entries
     )
 
+    # Store stock status message (from first STO entry that has one)
+    store_status = next(
+        (
+            e.get("buyingOption", {})
+            .get("cashCarry", {})
+            .get("availability", {})
+            .get("probability", {})
+            .get("thisDay", {})
+            .get("messageType", "OUT_OF_STOCK")
+            for e in sto_entries
+        ),
+        "OUT_OF_STOCK",
+    )
+
     # Earliest restock across all stores
     restocks = sorted(
         (
@@ -311,6 +337,7 @@ def parse_stock(data: dict) -> StockResult:
         online_available=online_available,
         online_status=online_status,
         store_stock=store_stock,
+        store_status=store_status,
         store_restock_date=restock_date,
         store_restock_qty=restock_qty,
     )
@@ -338,6 +365,7 @@ def check_stock(product: Product, country: str) -> CheckResult:
 
     try:
         data = resp.json()
+        logger.debug("API response for %s: %s", product.item_no, resp.text)
     except Exception as e:
         error = f"JSON parse error: {e}"
         err_console.print(f"[red]{error} for {product.item_no}[/red]")
@@ -477,6 +505,7 @@ def run(item_nos: list[str], interval: int):
         table.add_column("Description", style="dim")
         table.add_column("Online", justify="center")
         table.add_column("Store stock", justify="right")
+        table.add_column("Store status")
         table.add_column("Restock date")
         table.add_column("Restock qty", justify="right")
 
@@ -486,7 +515,13 @@ def run(item_nos: list[str], interval: int):
             match result:
                 case StockError():
                     table.add_row(
-                        product.item_no, product.name, "[red]Error[/red]", "-", "-", "-"
+                        product.item_no,
+                        product.name,
+                        "[red]Error[/red]",
+                        "-",
+                        "-",
+                        "-",
+                        "-",
                     )
                     continue
                 case StockResult():
@@ -498,6 +533,7 @@ def run(item_nos: list[str], interval: int):
             online_str = (
                 "[green]✓ YES[/green]" if result.online_available else "[red]✗ NO[/red]"
             )
+            store_status_str = result.store_status_formatted
             restock_str = result.store_restock_date or "—"
             restock_qty_str = (
                 str(result.store_restock_qty) if result.store_restock_date else "—"
@@ -507,6 +543,7 @@ def run(item_nos: list[str], interval: int):
                 product.name,
                 online_str,
                 str(result.store_stock),
+                store_status_str,
                 restock_str,
                 restock_qty_str,
             )
@@ -521,7 +558,11 @@ def run(item_nos: list[str], interval: int):
                 )
                 send_notification(product, result)
 
-            state[product.item_no] = {"available": is_available, "last_checked": now}
+            state[product.item_no] = {
+                "available": is_available,
+                "store_status": result.store_status,
+                "last_checked": now,
+            }
 
         console.print(table)
         save_state(state)
@@ -560,7 +601,7 @@ def run_once(item_nos: list[str]):
         )
         rprint(f"[bold]{product.name}[/bold] ([dim]{product.item_no}[/dim])")
         rprint(f"  Online:  {online}")
-        rprint(f"  Store:   {store}")
+        rprint(f"  Store:   {store} (status: {result.store_status_formatted})")
         rprint(f"  Restock: {restock}")
         rprint("")
 
@@ -568,7 +609,11 @@ def run_once(item_nos: list[str]):
         if result.available and not was_available:
             send_notification(product, result)
 
-        state[product.item_no] = {"available": result.available, "last_checked": now}
+        state[product.item_no] = {
+            "available": result.available,
+            "store_status": result.store_status,
+            "last_checked": now,
+        }
 
     save_state(state)
 
