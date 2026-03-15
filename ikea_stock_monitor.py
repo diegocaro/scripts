@@ -282,20 +282,16 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
 
 
 def send_error_notification(item_no: str, error: str):
-    token = CONFIG["telegram_token"]
-    chat_id = CONFIG["telegram_chat_id"]
-    if not token or not chat_id:
-        return
     msg = (
         f"⚠️ *IKEA Chile — Error checking stock*\n\n"
         f"Article `{item_no}`\n"
         f"Error: {error}"
     )
-    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        _send_telegram(api_url, chat_id, msg)
+        _send_telegram(msg)
     except httpx.HTTPError as e:
         console.print(f"[red]Failed to send error notification via Telegram: {e}[/red]")
+        logger.error("Failed to send Telegram notification: %s", e)
 
 
 def send_notification(item_no: str, result: StockResult):
@@ -324,12 +320,12 @@ def send_notification(item_no: str, result: StockResult):
         f"{restock_line}"
         f"[View on IKEA]({product_url})"
     )
-    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        _send_telegram(api_url, chat_id, msg)
+        _send_telegram(msg)
         console.print("[green]✓ Telegram notification sent.[/green]")
     except httpx.HTTPError as e:
-        console.print(f"[red]Telegram error (after retries): {e}[/red]")
+        console.print(f"[red]Failed to send Telegram notification: {e}[/red]")
+        logger.error("Failed to send Telegram notification: %s", e)
 
 
 @retry(
@@ -338,7 +334,13 @@ def send_notification(item_no: str, result: StockResult):
     wait=wait_exponential_jitter(initial=1, max=10),
     reraise=True,
 )
-def _send_telegram(api_url: str, chat_id: str, text: str):
+def _send_telegram(text: str):
+    token = CONFIG["telegram_token"]
+    chat_id = CONFIG["telegram_chat_id"]
+    if not token or not chat_id:
+        return
+    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+
     r = httpx.post(
         api_url,
         json={"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"},
@@ -485,6 +487,24 @@ def run_once(item_nos: list[str]):
     save_state(state)
 
 
+def test_telegram():
+    token = CONFIG["telegram_token"]
+    chat_id = CONFIG["telegram_chat_id"]
+    if not token or not chat_id:
+        console.print(
+            "[red]Telegram not configured. Set IKEA_TELEGRAM_TOKEN and "
+            "IKEA_TELEGRAM_CHAT_ID.[/red]"
+        )
+        sys.exit(1)
+    msg = "✅ IKEA Stock Monitor — Telegram integration is working\\!"
+    try:
+        _send_telegram(msg)
+        console.print("[green]✓ Test message sent successfully.[/green]")
+    except httpx.HTTPError as e:
+        console.print(f"[red]✗ Failed to send test message: {e}[/red]")
+        sys.exit(1)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -496,7 +516,7 @@ def parse_args():
     )
     parser.add_argument(
         "item_nos",
-        nargs="+",
+        nargs="*",
         metavar="ITEM_NO",
         type=lambda s: s.replace(".", ""),
         help="One or more IKEA article numbers (e.g. 10402841 or 104.028.41)",
@@ -524,6 +544,11 @@ def parse_args():
         action="store_true",
         help="Enable debug logging (implies --verbose, shows HTTP requests/responses)",
     )
+    parser.add_argument(
+        "--test-telegram",
+        action="store_true",
+        help="Send a test message to Telegram and exit",
+    )
     return parser.parse_args()
 
 
@@ -540,6 +565,14 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.test_telegram:
+        test_telegram()
+        sys.exit(0)
+
+    if not args.item_nos:
+        console.print("[red]Error: at least one ITEM_NO is required.[/red]")
+        sys.exit(1)
 
     if args.once:
         run_once(args.item_nos)
