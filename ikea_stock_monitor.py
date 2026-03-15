@@ -43,9 +43,11 @@ Changelog:
     2026-03-15
         • Added --file option to load products from JSON
         • Added --test-telegram option to verify Telegram setup
+        • Added --unit-tests flag with comprehensive test suite
+        • Added _get_product_name_from_url function for URL slug extraction
         • Enhanced documentation with setup instructions and features
         • Improved function docstrings with detailed parameters and behavior
-    
+
     2026-03-14
         • Initial release
         • Monitor IKEA Chile product availability via Telegram notifications
@@ -62,6 +64,7 @@ import os
 import re
 import sys
 import time
+import unittest
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -201,6 +204,16 @@ def _get_product_name_from_html(html: str) -> str | None:
     return None
 
 
+def _get_product_name_from_url(url: str, item_no: str) -> str | None:
+    # Looks for pattern: /p/{slug}-{itemNo}/
+
+    slug_match = re.search(r"/p/([a-z0-9-]+)-" + re.escape(item_no) + r"/", url)
+    if not slug_match:
+        return None
+    slug = slug_match.group(1).replace("-", " ").title()
+    return slug
+
+
 def fetch_product(item_no: str, country: str, language: str) -> Product:
     """Get product name from the slug in the 301 redirect URL.
     Valid products redirect to /p/{slug}-{itemNo}/
@@ -218,11 +231,10 @@ def fetch_product(item_no: str, country: str, language: str) -> Product:
         return Product(item_no, item_no)
 
     location = resp.headers.get("location", "")
-    slug_match = re.search(r"/p/([a-z0-9-]+)-" + item_no + r"/", location)
-    if not slug_match:
-        return Product(item_no, f"{item_no} (not found)")
+    slug = _get_product_name_from_url(location, item_no)
 
-    slug = slug_match.group(1).replace("-", " ").title()
+    if not slug:
+        return Product(item_no, f"{item_no} (not found)")
 
     # Get from the HTML of the product page (some products don't have a proper slug)
     # if resp.status_code == 301:
@@ -232,7 +244,12 @@ def fetch_product(item_no: str, country: str, language: str) -> Product:
     #         timeout=15,
     #     )
 
-    return Product(item_no, _get_product_name_from_html(resp.text) or slug or item_no)
+    # product_name = _get_product_name_from_html(resp.text)
+    return Product(item_no, slug or item_no)
+
+
+def clean_item_no(s: str | int) -> str:
+    return str(s).replace(".", "").strip()
 
 
 # ── Stock check ───────────────────────────────────────────────────────────────
@@ -574,11 +591,144 @@ def test_telegram():
         sys.exit(1)
 
 
+# ── Unit Tests ───────────────────────────────────────────────────────────────────────
+
+
+class TestCleanItemNo(unittest.TestCase):
+    """Tests for item number formatting."""
+
+    def test_formatted_item_no(self):
+        self.assertEqual(clean_item_no("104.028.41"), "10402841")
+
+    def test_integer_item_no(self):
+        self.assertEqual(clean_item_no(10402841), "10402841")
+
+    def test_regular_item_no(self):
+        self.assertEqual(clean_item_no("10402841"), "10402841")
+
+
+class TestProductNameExtraction(unittest.TestCase):
+    """Tests for product name extraction from HTML and URL."""
+
+    def test_extract_product_name_from_html(self):
+        html = "<html><head><title>BILLSTA Espejo de pared, plateado, 26x26 cm - IKEA Chile</title></head></html>"
+        result = _get_product_name_from_html(html)
+        self.assertEqual(result, "BILLSTA Espejo de pared")
+
+    def test_no_title_tag(self):
+        html = "<html><head></head></html>"
+        result = _get_product_name_from_html(html)
+        self.assertIsNone(result)
+
+    def test_extract_product_name_from_url(self):
+        url = "/p/billsta-espejo-de-pared-10402841/"
+        result = _get_product_name_from_url(url, "10402841")
+        self.assertEqual(result, "Billsta Espejo De Pared")
+
+    def test_extract_product_name_from_url_with_dots_in_item_no(self):
+        url = "/p/billsta-espejo-de-pared-104.028.41/"
+        result = _get_product_name_from_url(url, "104.028.41")
+        self.assertEqual(result, "Billsta Espejo De Pared")
+
+    def test_product_name_from_url_not_found(self):
+        url = "/cat/productos-products/"
+        result = _get_product_name_from_url(url, "10402841")
+        self.assertIsNone(result)
+
+
+class TestStockParsing(unittest.TestCase):
+    """Tests for stock data parsing."""
+
+    def test_parse_stock_in_stock(self):
+        data = {
+            "availabilities": [
+                {
+                    "classUnitKey": {"classUnitType": "RU"},
+                    "buyingOption": {
+                        "homeDelivery": {
+                            "availability": {
+                                "probability": {"thisDay": {"messageType": "IN_STOCK"}}
+                            }
+                        }
+                    },
+                },
+                {
+                    "classUnitKey": {"classUnitType": "STO"},
+                    "buyingOption": {
+                        "cashCarry": {"availability": {"quantity": 5, "restocks": []}}
+                    },
+                },
+            ]
+        }
+        result = parse_stock(data)
+        self.assertTrue(result.online_available)
+        self.assertEqual(result.store_stock, 5)
+        self.assertTrue(result.available)
+
+    def test_parse_stock_out_of_stock(self):
+        data = {
+            "availabilities": [
+                {
+                    "classUnitKey": {"classUnitType": "RU"},
+                    "buyingOption": {
+                        "homeDelivery": {
+                            "availability": {
+                                "probability": {
+                                    "thisDay": {"messageType": "OUT_OF_STOCK"}
+                                }
+                            }
+                        }
+                    },
+                },
+                {
+                    "classUnitKey": {"classUnitType": "STO"},
+                    "buyingOption": {
+                        "cashCarry": {"availability": {"quantity": 0, "restocks": []}}
+                    },
+                },
+            ]
+        }
+        result = parse_stock(data)
+        self.assertFalse(result.online_available)
+        self.assertEqual(result.store_stock, 0)
+        self.assertFalse(result.available)
+
+    def test_parse_stock_with_restock_info(self):
+        data = {
+            "availabilities": [
+                {
+                    "classUnitKey": {"classUnitType": "RU"},
+                    "buyingOption": {
+                        "homeDelivery": {
+                            "availability": {
+                                "probability": {
+                                    "thisDay": {"messageType": "OUT_OF_STOCK"}
+                                }
+                            }
+                        }
+                    },
+                },
+                {
+                    "classUnitKey": {"classUnitType": "STO"},
+                    "buyingOption": {
+                        "cashCarry": {
+                            "availability": {
+                                "quantity": 0,
+                                "restocks": [
+                                    {"earliestDate": "2026-03-20", "quantity": 10}
+                                ],
+                            }
+                        }
+                    },
+                },
+            ]
+        }
+        result = parse_stock(data)
+        self.assertEqual(result.store_restock_date, "2026-03-20")
+        self.assertEqual(result.store_restock_qty, 10)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
-
-
-def clean_item_no(s: str | int) -> str:
-    return str(s).replace(".", "").strip()
 
 
 def parse_args():
@@ -629,6 +779,11 @@ def parse_args():
         metavar="FILE",
         help='JSON file with a list of article numbers (e.g. ["40623913","104.028.41"])',
     )
+    parser.add_argument(
+        "--unit-tests",
+        action="store_true",
+        help="Run unit tests for core functionality and exit",
+    )
     return parser.parse_args()
 
 
@@ -645,6 +800,16 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.unit_tests:
+        loader = unittest.TestLoader()
+        suite = unittest.TestSuite()
+        suite.addTests(loader.loadTestsFromTestCase(TestCleanItemNo))
+        suite.addTests(loader.loadTestsFromTestCase(TestProductNameExtraction))
+        suite.addTests(loader.loadTestsFromTestCase(TestStockParsing))
+        runner = unittest.TextTestRunner(verbosity=2)
+        result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
 
     if args.test_telegram:
         test_telegram()
