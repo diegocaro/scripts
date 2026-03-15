@@ -1,0 +1,15 @@
+[tool.pyright]
+reportMissingImports = false
+
+[tool.ruff]
+fix = true
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = [
+    "UP", # modernize python
+    "RUF", # ruff specific rules
+]
+extend-ignore = [
+    "E731" # lambda assignment
+]
