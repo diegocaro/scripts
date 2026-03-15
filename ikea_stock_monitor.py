@@ -74,6 +74,7 @@ CONFIG = {
 # ──────────────────────────────────────────────
 
 console = Console()
+err_console = Console(stderr=True)
 logger = logging.getLogger("ikea_stock_monitor")
 
 # Ingka availability API — the same one the IKEA website calls.
@@ -290,8 +291,7 @@ def send_error_notification(item_no: str, error: str):
     try:
         _send_telegram(msg)
     except httpx.HTTPError as e:
-        console.print(f"[red]Failed to send error notification via Telegram: {e}[/red]")
-        logger.error("Failed to send Telegram notification: %s", e)
+        err_console.print(f"[red]Failed to send error notification via Telegram: {e}[/red]")
 
 
 def send_notification(item_no: str, result: StockResult):
@@ -324,8 +324,7 @@ def send_notification(item_no: str, result: StockResult):
         _send_telegram(msg)
         console.print("[green]✓ Telegram notification sent.[/green]")
     except httpx.HTTPError as e:
-        console.print(f"[red]Failed to send Telegram notification: {e}[/red]")
-        logger.error("Failed to send Telegram notification: %s", e)
+        err_console.print(f"[red]Failed to send Telegram notification: {e}[/red]")
 
 
 @retry(
