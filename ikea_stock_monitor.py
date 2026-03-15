@@ -145,13 +145,13 @@ class StockResult:
     store_restock_qty: int
 
     @property
-    def store_status_formatted(self) -> str:
+    def store_stock_formatted(self) -> str:
         color = (
             "green"
             if ("HIGH" in self.store_status or self.store_status == "IN_STOCK")
             else "yellow" if "LOW" in self.store_status else "red"
         )
-        return f"[{color}]{self.store_status}[/{color}]"
+        return f"[{color}]{self.store_stock}[/{color}]"
 
 
 @dataclass(frozen=True)
@@ -517,7 +517,6 @@ def run(item_nos: list[str], interval: int):
         table.add_column("Description", style="dim")
         table.add_column("Online", justify="center")
         table.add_column("Store stock", justify="right")
-        table.add_column("Store status")
         table.add_column("Restock date")
         table.add_column("Restock qty", justify="right")
 
@@ -532,7 +531,6 @@ def run(item_nos: list[str], interval: int):
                         product.item_no,
                         product.name,
                         "[red]Error[/red]",
-                        "-",
                         "-",
                         "-",
                         "-",
@@ -552,8 +550,7 @@ def run(item_nos: list[str], interval: int):
                 product.item_no,
                 product.name,
                 online_str,
-                str(result.store_stock),
-                result.store_status_formatted,
+                result.store_stock_formatted,
                 restock_str,
                 restock_qty_str,
             )
@@ -601,7 +598,7 @@ def run_once(item_nos: list[str]):
             if result.online_available
             else "[red]✗ out of stock[/red]"
         )
-        store = f"{result.store_stock} units in store"
+        store = f"{result.store_stock_formatted} units in store"
         restock = (
             f"restock {result.store_restock_date} ({result.store_restock_qty} units)"
             if result.store_restock_date
@@ -609,7 +606,7 @@ def run_once(item_nos: list[str]):
         )
         rprint(f"[bold]{product.name}[/bold] ([dim]{product.item_no}[/dim])")
         rprint(f"  Online:  {online}")
-        rprint(f"  Store:   {store} (status: {result.store_status_formatted})")
+        rprint(f"  Store:   {store}")
         rprint(f"  Restock: {restock}")
         rprint("")
 
