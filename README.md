@@ -2,7 +2,7 @@
 
 
 
-Scripts for fun stuff, probably vibe-coded. One of my three cats approved the PRs.
+Scripts for fun stuff, probably vibe-coded but supervised by me. One of my three cats approved the PRs.
 
 All scripts use `uv` inline dependencies (I love them!).
 
