@@ -5,35 +5,49 @@ on:
   pull_request:
 
 jobs:
-  test:
+  discover:
     runs-on: ubuntu-latest
+    outputs:
+      scripts: ${{ steps.find.outputs.scripts }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
 
-      - name: Discover and run scripts with --unit-tests
+      - name: Discover scripts with --unit-tests
+        id: find
         run: |
-          failed=0
-          found=0
-
+          scripts=()
           while IFS= read -r script; do
             uv run "$script" --unit-tests
             exit_code=$?
-            if [ $exit_code -eq 2 ]; then
-              echo "SKIPPED: $script (--unit-tests not supported)"
-            elif [ $exit_code -eq 0 ]; then
-              found=$((found + 1))
-              echo "PASSED: $script"
-            else
-              found=$((found + 1))
-              echo "::error file=$script::Tests failed in $script"
-              failed=$((failed + 1))
+            if [ $exit_code -ne 2 ]; then
+              echo "Found: $script"
+              scripts+=("$script")
             fi
           done < <(find . -maxdepth 1 -name '*.py' | sort)
 
-          echo "Ran unit tests in $found script(s), $failed failed."
-          exit $failed
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "scripts=[]" >> "$GITHUB_OUTPUT"
+          else
+            echo "scripts=$(printf '%s\n' "${scripts[@]}" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: discover
+    if: ${{ needs.discover.outputs.scripts != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        script: ${{ fromJson(needs.discover.outputs.scripts) }}
+    name: Test ${{ matrix.script }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run unit tests
+        run: uv run ${{ matrix.script }} --unit-tests
