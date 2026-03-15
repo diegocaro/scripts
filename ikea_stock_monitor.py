@@ -221,12 +221,12 @@ def check_stock(product: Product, country: str) -> StockResult | None:
         resp = _fetch_url(url, headers=headers)
     except httpx.HTTPStatusError as e:
         error = f"HTTP error: {e}"
-        console.print(f"[red]{error} for {product.item_no}[/red]")
+        err_console.print(f"[red]{error} for {product.item_no}[/red]")
         send_error_notification(product, error)
         return None
     except httpx.HTTPError as e:
         error = f"Network error (after retries): {e}"
-        console.print(f"[red]{error} for {product.item_no}[/red]")
+        err_console.print(f"[red]{error} for {product.item_no}[/red]")
         send_error_notification(product, error)
         return None
 
@@ -234,7 +234,7 @@ def check_stock(product: Product, country: str) -> StockResult | None:
         data = resp.json()
     except Exception as e:
         error = f"JSON parse error: {e}"
-        console.print(f"[red]{error} for {product.item_no}[/red]")
+        err_console.print(f"[red]{error} for {product.item_no}[/red]")
         send_error_notification(product, error)
         return None
 
@@ -514,7 +514,7 @@ def test_telegram():
         _send_telegram(msg)
         console.print("[green]✓ Test message sent successfully.[/green]")
     except httpx.HTTPError as e:
-        console.print(f"[red]✗ Failed to send test message: {e}[/red]")
+        err_console.print(f"[red]✗ Failed to send test message: {e}[/red]")
         sys.exit(1)
 
 
@@ -596,11 +596,13 @@ if __name__ == "__main__":
             data = json.loads(args.file.read_text())
             item_nos.extend(str(n).replace(".", "") for n in data)
         except (json.JSONDecodeError, OSError) as e:
-            console.print(f"[red]Error reading {args.file}: {e}[/red]")
+            err_console.print(f"[red]Error reading {args.file}: {e}[/red]")
             sys.exit(1)
 
     if not item_nos:
-        console.print("[red]Error: provide ITEM_NOs as arguments or via --file.[/red]")
+        err_console.print(
+            "[red]Error: provide ITEM_NOs as arguments or via --file.[/red]"
+        )
         sys.exit(1)
 
     if args.once:
