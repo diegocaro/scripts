@@ -1,0 +1,53 @@
+name: Test Scripts
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      scripts: ${{ steps.find.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Discover scripts with --unit-tests
+        id: find
+        run: |
+          scripts=()
+          while IFS= read -r script; do
+            uv run "$script" --unit-tests
+            exit_code=$?
+            if [ $exit_code -ne 2 ]; then
+              echo "Found: $script"
+              scripts+=("$script")
+            fi
+          done < <(find . -maxdepth 1 -name '*.py' | sort)
+
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "scripts=[]" >> "$GITHUB_OUTPUT"
+          else
+            echo "scripts=$(printf '%s\n' "${scripts[@]}" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: discover
+    if: ${{ needs.discover.outputs.scripts != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        script: ${{ fromJson(needs.discover.outputs.scripts) }}
+    name: Test ${{ matrix.script }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run unit tests
+        run: uv run ${{ matrix.script }} --unit-tests
