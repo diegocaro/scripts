@@ -327,7 +327,7 @@ def _send_telegram(api_url: str, chat_id: str, text: str):
 # ── State persistence (avoid duplicate notifications) ────────────────────────
 
 
-def now() -> str:
+def now_iso() -> str:
     return datetime.now().astimezone().isoformat()
 
 
@@ -372,7 +372,7 @@ def run(item_nos: list[str], interval: int):
     console.print()
 
     while True:
-        now = now()
+        now = now_iso()
         table = Table(title=f"Stock check — {now}", show_lines=True)
         table.add_column("Article", style="cyan", no_wrap=True)
         table.add_column("Description", style="dim")
@@ -428,7 +428,7 @@ def run(item_nos: list[str], interval: int):
 
 def run_once(item_nos: list[str]):
     state = load_state()
-    now = now()
+    now = now_iso()
 
     for item_no in item_nos:
         name = fetch_product_name(item_no, CONFIG["country"], CONFIG["language"])
