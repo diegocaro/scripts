@@ -9,7 +9,7 @@
 # ]
 # ///
 # Copyright (c) 2026 Diego Caro
-"""
+r"""
          _..._
        .'     '.
       /'-.---.-'\
@@ -28,7 +28,9 @@
 jgs  '._/     \_.'
 
 * Inspired by Punch the Japanese macaque
+"""
 
+"""
 IKEA Chile Stock Monitor
 ========================
 Monitors IKEA Chile product availability and notifies you via Telegram
