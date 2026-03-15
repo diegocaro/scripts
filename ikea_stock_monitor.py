@@ -329,6 +329,33 @@ def run(item_nos: list[str], interval: int):
         time.sleep(interval * 60)
 
 
+def run_once(item_nos: list[str]):
+    for item_no in item_nos:
+        name = fetch_product_name(item_no, CONFIG["country"], CONFIG["language"])
+        result = check_stock(item_no, CONFIG["country"])
+        if result is None:
+            rprint(f"[red]✗ {item_no}[/red]: could not fetch stock data")
+            continue
+        online = (
+            "[green]✓ available[/green]"
+            if result.online_available
+            else "[red]✗ out of stock[/red]"
+        )
+        store = f"{result.store_stock} units in store"
+        restock = (
+            f"restock {result.store_restock_date} ({result.store_restock_qty} units)"
+            if result.store_restock_date
+            else "no restock info"
+        )
+        rprint(f"[bold]{name}[/bold] ([dim]{item_no}[/dim])")
+        rprint(f"  Online:  {online}")
+        rprint(f"  Store:   {store}")
+        rprint(f"  Restock: {restock}")
+        rprint("")
+        if result.available:
+            send_notification(item_no, result)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -342,7 +369,8 @@ def parse_args():
         "item_nos",
         nargs="+",
         metavar="ITEM_NO",
-        help="One or more IKEA article numbers (e.g. 30623912)",
+        type=lambda s: s.replace(".", ""),
+        help="One or more IKEA article numbers (e.g. 30623912 or 306.239.12)",
     )
     parser.add_argument(
         "--interval",
@@ -363,15 +391,7 @@ if __name__ == "__main__":
     args = parse_args()
 
     if args.once:
-        for item_no in args.item_nos:
-            result = check_stock(item_no, CONFIG["country"])
-            if result:
-                status = "IN STOCK" if result.available else "OUT OF STOCK"
-                rprint(
-                    f"[bold]{item_no}[/bold]: {status} | online={result.online_status} | store_stock={result.store_stock} | restock={result.store_restock_date}"
-                )
-                if result.available:
-                    send_notification(item_no, result)
+        run_once(args.item_nos)
         sys.exit(0)
 
     try:
