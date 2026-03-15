@@ -146,12 +146,12 @@ class StockResult:
 
     @property
     def store_status_formatted(self) -> str:
-        if "HIGH" in self.store_status or self.store_status == "IN_STOCK":
-            return f"[green]{self.store_status}[/green]"
-        elif "LOW" in self.store_status:
-            return f"[yellow]{self.store_status}[/yellow]"
-        else:
-            return f"[red]{self.store_status}[/red]"
+        color = (
+            "green"
+            if ("HIGH" in self.store_status or self.store_status == "IN_STOCK")
+            else "yellow" if "LOW" in self.store_status else "red"
+        )
+        return f"[{color}]{self.store_status}[/{color}]"
 
 
 @dataclass(frozen=True)
@@ -344,7 +344,11 @@ def parse_stock(data: dict) -> StockResult:
 
 
 def check_stock(product: Product, country: str) -> CheckResult:
-    """Fetch availability from IKEA's Ingka API and parse the response."""
+    """Fetch and parse availability from IKEA's Ingka API.
+
+    Pure data flow: returns StockResult or StockError; all IO side-effects
+    (notifications, console output) are left to the caller.
+    """
     url = AVAILABILITY_URL.format(country=country, item_no=product.item_no)
     headers = {
         "Accept": "application/json;version=2",
@@ -353,24 +357,15 @@ def check_stock(product: Product, country: str) -> CheckResult:
     try:
         resp = _fetch_url(url, headers=headers)
     except httpx.HTTPStatusError as e:
-        error = f"HTTP error: {e}"
-        err_console.print(f"[red]{error} for {product.item_no}[/red]")
-        send_error_notification(product, error)
-        return StockError(product, error)
+        return StockError(product, f"HTTP error: {e}")
     except httpx.HTTPError as e:
-        error = f"Network error (after retries): {e}"
-        err_console.print(f"[red]{error} for {product.item_no}[/red]")
-        send_error_notification(product, error)
-        return StockError(product, error)
+        return StockError(product, f"Network error (after retries): {e}")
 
     try:
         data = resp.json()
         logger.debug("API response for %s: %s", product.item_no, resp.text)
     except Exception as e:
-        error = f"JSON parse error: {e}"
-        err_console.print(f"[red]{error} for {product.item_no}[/red]")
-        send_error_notification(product, error)
-        return StockError(product, error)
+        return StockError(product, f"JSON parse error: {e}")
 
     result = parse_stock(data)
     logger.info(
@@ -451,6 +446,23 @@ def _send_telegram(text: str):
     r.raise_for_status()
 
 
+# ── Pure state helpers ───────────────────────────────────────────────────────
+
+
+def should_notify(old_entry: dict | None, result: StockResult) -> bool:
+    """Pure predicate: True when a product transitions from unavailable to available."""
+    return result.available and not (old_entry or {}).get("available", False)
+
+
+def make_state_entry(result: StockResult, now: str) -> dict:
+    """Pure factory: build the state dict entry for a product."""
+    return {
+        "available": result.available,
+        "store_status": result.store_status,
+        "last_checked": now,
+    }
+
+
 # ── State persistence (avoid duplicate notifications) ────────────────────────
 
 
@@ -513,7 +525,9 @@ def run(item_nos: list[str], interval: int):
             result = check_stock(product, CONFIG["country"])
 
             match result:
-                case StockError():
+                case StockError(message=msg):
+                    err_console.print(f"[red]{msg} for {product.item_no}[/red]")
+                    send_error_notification(product, msg)
                     table.add_row(
                         product.item_no,
                         product.name,
@@ -527,13 +541,9 @@ def run(item_nos: list[str], interval: int):
                 case StockResult():
                     pass
 
-            was_available = state.get(product.item_no, {}).get("available", False)
-            is_available = result.available
-
             online_str = (
                 "[green]✓ YES[/green]" if result.online_available else "[red]✗ NO[/red]"
             )
-            store_status_str = result.store_status_formatted
             restock_str = result.store_restock_date or "—"
             restock_qty_str = (
                 str(result.store_restock_qty) if result.store_restock_date else "—"
@@ -543,13 +553,13 @@ def run(item_nos: list[str], interval: int):
                 product.name,
                 online_str,
                 str(result.store_stock),
-                store_status_str,
+                result.store_status_formatted,
                 restock_str,
                 restock_qty_str,
             )
 
             # Notify only on transition: out-of-stock → in-stock
-            if is_available and not was_available:
+            if should_notify(state.get(product.item_no), result):
                 logger.info(
                     "Transition for %s: unavailable → available", product.item_no
                 )
@@ -558,11 +568,7 @@ def run(item_nos: list[str], interval: int):
                 )
                 send_notification(product, result)
 
-            state[product.item_no] = {
-                "available": is_available,
-                "store_status": result.store_status,
-                "last_checked": now,
-            }
+            state[product.item_no] = make_state_entry(result, now)
 
         console.print(table)
         save_state(state)
@@ -583,6 +589,8 @@ def run_once(item_nos: list[str]):
 
         match result:
             case StockError(message=msg):
+                err_console.print(f"[red]{msg} for {product.item_no}[/red]")
+                send_error_notification(product, msg)
                 rprint(f"[red]✗ {product.item_no}[/red]: {msg}")
                 continue
             case StockResult():
@@ -605,15 +613,10 @@ def run_once(item_nos: list[str]):
         rprint(f"  Restock: {restock}")
         rprint("")
 
-        was_available = state.get(product.item_no, {}).get("available", False)
-        if result.available and not was_available:
+        if should_notify(state.get(product.item_no), result):
             send_notification(product, result)
 
-        state[product.item_no] = {
-            "available": result.available,
-            "store_status": result.store_status,
-            "last_checked": now,
-        }
+        state[product.item_no] = make_state_entry(result, now)
 
     save_state(state)
 
