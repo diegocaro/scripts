@@ -8,6 +8,7 @@
 #   "tenacity",
 # ]
 # ///
+# Copyright (c) 2026 Diego Caro
 """
          _..._
        .'     '.
@@ -82,8 +83,10 @@ Disclaimer:
     This script is intended for personal use to monitor product availability on the IKEA Chile website.
     It uses the same public API that the IKEA website calls, but it is not affiliated with or endorsed by IKEA.
     Use responsibly and be mindful of IKEA's terms of service and rate limits when making API requests.
-
+ 
 * ASCII art by Joan G. Stark (Spunk) via https://www.asciiart.eu/art/f7ce0b89a1c37ee4
+
+Made with ❤️ by Diego Caro (with Claude Sonnet + Claude Opus)
 """
 
 import argparse
