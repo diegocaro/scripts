@@ -93,6 +93,18 @@ STATE_FILE = Path.home() / ".ikea_stock_monitor_state.json"
 
 
 @dataclass(frozen=True)
+class Product:
+    item_no: str
+    name: str
+
+    @property
+    def url(self) -> str:
+        return PRODUCT_URL.format(
+            country=CONFIG["country"], lang=CONFIG["language"], item_no=self.item_no
+        )
+
+
+@dataclass(frozen=True)
 class StockResult:
     available: bool
     online_available: bool
@@ -155,7 +167,7 @@ def _get_product_name_from_html(html: str) -> str | None:
     return None
 
 
-def fetch_product_name(item_no: str, country: str, language: str) -> str:
+def fetch_product(item_no: str, country: str, language: str) -> Product:
     """Get product name from the slug in the 301 redirect URL.
     Valid products redirect to /p/{slug}-{itemNo}/
     Invalid products redirect to /cat/productos-products/
@@ -169,12 +181,12 @@ def fetch_product_name(item_no: str, country: str, language: str) -> str:
         )
     except httpx.HTTPError:
         logger.info("Failed to fetch product page for %s", item_no)
-        return item_no
+        return Product(item_no, item_no)
 
     location = resp.headers.get("location", "")
     slug_match = re.search(r"/p/([a-z0-9-]+)-" + item_no + r"/", location)
     if not slug_match:
-        return f"{item_no} (not found)"
+        return Product(item_no, f"{item_no} (not found)")
 
     slug = slug_match.group(1).replace("-", " ").title()
 
@@ -186,13 +198,13 @@ def fetch_product_name(item_no: str, country: str, language: str) -> str:
     #         timeout=15,
     #     )
 
-    return _get_product_name_from_html(resp.text) or slug or item_no
+    return Product(item_no, _get_product_name_from_html(resp.text) or slug or item_no)
 
 
 # ── Stock check ───────────────────────────────────────────────────────────────
 
 
-def check_stock(item_no: str, country: str) -> StockResult | None:
+def check_stock(product: Product, country: str) -> StockResult | None:
     """
     Call IKEA's Ingka availability API and parse the response.
 
@@ -200,7 +212,7 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
       - classUnitType "RU" (retail unit, e.g. "CL") = online/national availability
       - classUnitType "STO" = individual store availability
     """
-    url = AVAILABILITY_URL.format(country=country, item_no=item_no)
+    url = AVAILABILITY_URL.format(country=country, item_no=product.item_no)
     headers = {
         "Accept": "application/json;version=2",
         "X-Client-ID": INGKA_CLIENT_ID,
@@ -209,21 +221,21 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
         resp = _fetch_url(url, headers=headers)
     except httpx.HTTPStatusError as e:
         error = f"HTTP error: {e}"
-        console.print(f"[red]{error} for {item_no}[/red]")
-        send_error_notification(item_no, error)
+        console.print(f"[red]{error} for {product.item_no}[/red]")
+        send_error_notification(product, error)
         return None
     except httpx.HTTPError as e:
         error = f"Network error (after retries): {e}"
-        console.print(f"[red]{error} for {item_no}[/red]")
-        send_error_notification(item_no, error)
+        console.print(f"[red]{error} for {product.item_no}[/red]")
+        send_error_notification(product, error)
         return None
 
     try:
         data = resp.json()
     except Exception as e:
         error = f"JSON parse error: {e}"
-        console.print(f"[red]{error} for {item_no}[/red]")
-        send_error_notification(item_no, error)
+        console.print(f"[red]{error} for {product.item_no}[/red]")
+        send_error_notification(product, error)
         return None
 
     online_available = False
@@ -263,7 +275,7 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
     available = online_available or store_stock > 0
     logger.info(
         "%s: online=%s store=%d available=%s",
-        item_no,
+        product.item_no,
         online_status,
         store_stock,
         available,
@@ -282,19 +294,21 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
 # ── Telegram notification ─────────────────────────────────────────────────────
 
 
-def send_error_notification(item_no: str, error: str):
+def send_error_notification(product: Product, error: str):
     msg = (
         f"⚠️ *IKEA Chile — Error checking stock*\n\n"
-        f"Article `{item_no}`\n"
+        f"*{product.name}* \\(`{product.item_no}`\\)\n"
         f"Error: {error}"
     )
     try:
         _send_telegram(msg)
     except httpx.HTTPError as e:
-        err_console.print(f"[red]Failed to send error notification via Telegram: {e}[/red]")
+        err_console.print(
+            f"[red]Failed to send error notification via Telegram: {e}[/red]"
+        )
 
 
-def send_notification(item_no: str, result: StockResult):
+def send_notification(product: Product, result: StockResult):
     token = CONFIG["telegram_token"]
     chat_id = CONFIG["telegram_chat_id"]
     if not token or not chat_id:
@@ -303,9 +317,6 @@ def send_notification(item_no: str, result: StockResult):
             "IKEA_TELEGRAM_CHAT_ID (or edit CONFIG in the script).[/yellow]"
         )
         return
-    product_url = PRODUCT_URL.format(
-        country=CONFIG["country"], lang=CONFIG["language"], item_no=item_no
-    )
     online = "✅ Available" if result.online_available else "❌ Out of stock"
     restock_line = (
         f"Restock expected: *{result.store_restock_date}* \\({result.store_restock_qty} units\\)\n"
@@ -314,11 +325,11 @@ def send_notification(item_no: str, result: StockResult):
     )
     msg = (
         f"🛒 *IKEA Chile — Product available\\!*\n\n"
-        f"Article `{item_no}` is back in stock\\.\n"
+        f"*{product.name}* \\(`{product.item_no}`\\) is back in stock\\.\n"
         f"Online: *{online}*\n"
         f"Store stock: *{result.store_stock}* units\n"
         f"{restock_line}"
-        f"[View on IKEA]({product_url})"
+        f"[View on IKEA]({product.url})"
     )
     try:
         _send_telegram(msg)
@@ -386,13 +397,13 @@ def run(item_nos: list[str], interval: int):
 
     state = load_state()
 
-    console.print("[dim]Fetching product names…[/dim]")
-    product_names = {
-        item_no: fetch_product_name(item_no, CONFIG["country"], CONFIG["language"])
+    console.print("[dim]Fetching product info…[/dim]")
+    products = [
+        fetch_product(item_no, CONFIG["country"], CONFIG["language"])
         for item_no in item_nos
-    }
-    for item_no, name in product_names.items():
-        console.print(f"  [cyan]{item_no}[/cyan] → {name}")
+    ]
+    for p in products:
+        console.print(f"  [cyan]{p.item_no}[/cyan] → {p.name}")
     console.print()
 
     while True:
@@ -405,14 +416,15 @@ def run(item_nos: list[str], interval: int):
         table.add_column("Restock date")
         table.add_column("Restock qty", justify="right")
 
-        for item_no in item_nos:
-            description = product_names.get(item_no, item_no)
-            result = check_stock(item_no, CONFIG["country"])
+        for product in products:
+            result = check_stock(product, CONFIG["country"])
             if result is None:
-                table.add_row(item_no, description, "[red]Error[/red]", "-", "-", "-")
+                table.add_row(
+                    product.item_no, product.name, "[red]Error[/red]", "-", "-", "-"
+                )
                 continue
 
-            was_available = state.get(item_no, {}).get("available", False)
+            was_available = state.get(product.item_no, {}).get("available", False)
             is_available = result.available
 
             online_str = (
@@ -423,8 +435,8 @@ def run(item_nos: list[str], interval: int):
                 str(result.store_restock_qty) if result.store_restock_date else "—"
             )
             table.add_row(
-                item_no,
-                description,
+                product.item_no,
+                product.name,
                 online_str,
                 str(result.store_stock),
                 restock_str,
@@ -433,13 +445,15 @@ def run(item_nos: list[str], interval: int):
 
             # Notify only on transition: out-of-stock → in-stock
             if is_available and not was_available:
-                logger.info("Transition for %s: unavailable → available", item_no)
-                console.print(
-                    f"\n[bold green]🎉 {item_no} is now available! Sending Telegram message…[/bold green]"
+                logger.info(
+                    "Transition for %s: unavailable → available", product.item_no
                 )
-                send_notification(item_no, result)
+                console.print(
+                    f"\n[bold green]🎉 {product.item_no} is now available! Sending Telegram message…[/bold green]"
+                )
+                send_notification(product, result)
 
-            state[item_no] = {"available": is_available, "last_checked": now}
+            state[product.item_no] = {"available": is_available, "last_checked": now}
 
         console.print(table)
         save_state(state)
@@ -455,10 +469,10 @@ def run_once(item_nos: list[str]):
     now = now_iso()
 
     for item_no in item_nos:
-        name = fetch_product_name(item_no, CONFIG["country"], CONFIG["language"])
-        result = check_stock(item_no, CONFIG["country"])
+        product = fetch_product(item_no, CONFIG["country"], CONFIG["language"])
+        result = check_stock(product, CONFIG["country"])
         if result is None:
-            rprint(f"[red]✗ {item_no}[/red]: could not fetch stock data")
+            rprint(f"[red]✗ {product.item_no}[/red]: could not fetch stock data")
             continue
         online = (
             "[green]✓ available[/green]"
@@ -471,17 +485,17 @@ def run_once(item_nos: list[str]):
             if result.store_restock_date
             else "no restock info"
         )
-        rprint(f"[bold]{name}[/bold] ([dim]{item_no}[/dim])")
+        rprint(f"[bold]{product.name}[/bold] ([dim]{product.item_no}[/dim])")
         rprint(f"  Online:  {online}")
         rprint(f"  Store:   {store}")
         rprint(f"  Restock: {restock}")
         rprint("")
 
-        was_available = state.get(item_no, {}).get("available", False)
+        was_available = state.get(product.item_no, {}).get("available", False)
         if result.available and not was_available:
-            send_notification(item_no, result)
+            send_notification(product, result)
 
-        state[item_no] = {"available": result.available, "last_checked": now}
+        state[product.item_no] = {"available": result.available, "last_checked": now}
 
     save_state(state)
 
