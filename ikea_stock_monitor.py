@@ -3,6 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "httpx",
+#   "python-dotenv",
 #   "rich",
 # ]
 # ///
@@ -38,10 +39,13 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+
+load_dotenv()
 
 # ──────────────────────────────────────────────
 # ❶  CONFIGURATION  — edit here or use env vars
