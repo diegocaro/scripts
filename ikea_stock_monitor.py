@@ -728,6 +728,17 @@ class TestStockParsing(unittest.TestCase):
         self.assertEqual(result.store_restock_qty, 10)
 
 
+def run_tests() -> unittest.TestResult:
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestCleanItemNo))
+    suite.addTests(loader.loadTestsFromTestCase(TestProductNameExtraction))
+    suite.addTests(loader.loadTestsFromTestCase(TestStockParsing))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    return result
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -802,13 +813,7 @@ if __name__ == "__main__":
     )
 
     if args.unit_tests:
-        loader = unittest.TestLoader()
-        suite = unittest.TestSuite()
-        suite.addTests(loader.loadTestsFromTestCase(TestCleanItemNo))
-        suite.addTests(loader.loadTestsFromTestCase(TestProductNameExtraction))
-        suite.addTests(loader.loadTestsFromTestCase(TestStockParsing))
-        runner = unittest.TextTestRunner(verbosity=2)
-        result = runner.run(suite)
+        result = run_tests()
         sys.exit(0 if result.wasSuccessful() else 1)
 
     if args.test_telegram:
