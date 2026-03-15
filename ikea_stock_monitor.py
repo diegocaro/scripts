@@ -9,6 +9,25 @@
 # ]
 # ///
 """
+         _..._
+       .'     '.
+      /'-.---.-'\
+      |/`     `\|
+     ( \  0 0  / )
+      |/   V   \|
+       \ '-:-' /
+      .'`-----'`.
+    /`           `\
+   /  /         \  \
+  /._/|         |\_.\
+  |  )\._     _./(  |
+  \_)_/_   Y   _\_(_/
+    / ` ) / \ / ` \
+    \   \/   \|   /
+jgs  '._/     \_.'
+
+* Inspired by Punch the Japanese macaque
+
 IKEA Chile Stock Monitor
 ========================
 Monitors IKEA Chile product availability and notifies you via Telegram
@@ -57,6 +76,14 @@ Changelog:
         • State persistence to avoid duplicate alerts
         • Configurable check intervals
         • Support for multiple products and custom article number formats
+
+
+Disclaimer:
+    This script is intended for personal use to monitor product availability on the IKEA Chile website.
+    It uses the same public API that the IKEA website calls, but it is not affiliated with or endorsed by IKEA.
+    Use responsibly and be mindful of IKEA's terms of service and rate limits when making API requests.
+
+* ASCII art by Joan G. Stark (Spunk) via https://www.asciiart.eu/art/f7ce0b89a1c37ee4
 """
 
 import argparse
