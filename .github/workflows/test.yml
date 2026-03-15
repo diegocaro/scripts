@@ -2,7 +2,15 @@ name: Test Scripts
 
 on:
   push:
+    branches:
+      - main
+    paths:
+      - '**.py'
+      - '.github/workflows/*.yml'
   pull_request:
+    paths:
+      - '**.py'
+      - '.github/workflows/*.yml'
 
 jobs:
   discover:
