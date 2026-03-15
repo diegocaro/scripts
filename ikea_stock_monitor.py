@@ -562,6 +562,13 @@ def parse_args():
         action="store_true",
         help="Send a test message to Telegram and exit",
     )
+    parser.add_argument(
+        "-f",
+        "--file",
+        type=Path,
+        metavar="FILE",
+        help='JSON file with a list of article numbers (e.g. ["40623913","104.028.41"])',
+    )
     return parser.parse_args()
 
 
@@ -583,15 +590,24 @@ if __name__ == "__main__":
         test_telegram()
         sys.exit(0)
 
-    if not args.item_nos:
-        console.print("[red]Error: at least one ITEM_NO is required.[/red]")
+    item_nos = list(args.item_nos or [])
+    if args.file:
+        try:
+            data = json.loads(args.file.read_text())
+            item_nos.extend(str(n).replace(".", "") for n in data)
+        except (json.JSONDecodeError, OSError) as e:
+            console.print(f"[red]Error reading {args.file}: {e}[/red]")
+            sys.exit(1)
+
+    if not item_nos:
+        console.print("[red]Error: provide ITEM_NOs as arguments or via --file.[/red]")
         sys.exit(1)
 
     if args.once:
-        run_once(args.item_nos)
+        run_once(item_nos)
         sys.exit(0)
 
     try:
-        run(args.item_nos, args.interval)
+        run(item_nos, args.interval)
     except KeyboardInterrupt:
         console.print("\n[yellow]Monitor stopped.[/yellow]")
