@@ -6,6 +6,8 @@ Scripts for fun stuff, probably vibe-coded but supervised by me. One of my three
 
 All scripts use `uv` inline dependencies (I love them!).
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the project's philosophy and conventions.
+
 ## Fun stuff
 
 | Script | Description |
@@ -22,9 +24,6 @@ All scripts use `uv` inline dependencies (I love them!).
    ```
 
    `uv` will automatically install the required dependencies on the first run.
-
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the project's philosophy and conventions.
 
 
 ## Team
