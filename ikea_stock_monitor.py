@@ -16,13 +16,13 @@ when items are back in stock.
 
 Usage:
     chmod +x ikea_stock_monitor.py
-    ./ikea_stock_monitor.py 30623912 40623913 ...
+    ./ikea_stock_monitor.py 10402841 40623913 ...
 
     # Custom interval:
-    ./ikea_stock_monitor.py --interval 60 30623912
+    ./ikea_stock_monitor.py --interval 60 10402841
 
     # Single check and exit (useful for cron):
-    ./ikea_stock_monitor.py --once 30623912
+    ./ikea_stock_monitor.py --once 10402841
 
 
 Configuration (edit the CONFIG section below or use env vars):
@@ -327,6 +327,10 @@ def _send_telegram(api_url: str, chat_id: str, text: str):
 # ── State persistence (avoid duplicate notifications) ────────────────────────
 
 
+def now() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
@@ -368,7 +372,7 @@ def run(item_nos: list[str], interval: int):
     console.print()
 
     while True:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = now()
         table = Table(title=f"Stock check — {now}", show_lines=True)
         table.add_column("Article", style="cyan", no_wrap=True)
         table.add_column("Description", style="dim")
@@ -423,6 +427,9 @@ def run(item_nos: list[str], interval: int):
 
 
 def run_once(item_nos: list[str]):
+    state = load_state()
+    now = now()
+
     for item_no in item_nos:
         name = fetch_product_name(item_no, CONFIG["country"], CONFIG["language"])
         result = check_stock(item_no, CONFIG["country"])
@@ -445,8 +452,14 @@ def run_once(item_nos: list[str]):
         rprint(f"  Store:   {store}")
         rprint(f"  Restock: {restock}")
         rprint("")
-        if result.available:
+
+        was_available = state.get(item_no, {}).get("available", False)
+        if result.available and not was_available:
             send_notification(item_no, result)
+
+        state[item_no] = {"available": result.available, "last_checked": now}
+
+    save_state(state)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -463,7 +476,7 @@ def parse_args():
         nargs="+",
         metavar="ITEM_NO",
         type=lambda s: s.replace(".", ""),
-        help="One or more IKEA article numbers (e.g. 30623912 or 306.239.12)",
+        help="One or more IKEA article numbers (e.g. 10402841 or 104.028.41)",
     )
     parser.add_argument(
         "--interval",
