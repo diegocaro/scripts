@@ -30,8 +30,10 @@ Configuration (edit the CONFIG section below or use env vars):
 import argparse
 import json
 import os
+import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -70,7 +72,16 @@ INGKA_CLIENT_ID = "b6c117e5-ae61-4ef5-b4cc-e0b1e37f0631"
 
 PRODUCT_URL = "https://www.ikea.com/{country}/{lang}/p/-{item_no}/"
 STATE_FILE = Path.home() / ".ikea_stock_monitor_state.json"
-PRODUCT_NAME_URL = "https://api.ingka.ikea.com/product/ingka/{country}/{item_no}"
+
+
+@dataclass(frozen=True)
+class StockResult:
+    available: bool
+    online_available: bool
+    online_status: str
+    store_stock: int
+    store_restock_date: str | None
+    store_restock_qty: int
 
 
 # ── Product name lookup ───────────────────────────────────────────────────────
@@ -87,7 +98,6 @@ def fetch_product_name(item_no: str, country: str, language: str) -> str:
             follow_redirects=True,
         )
         # Title format: "NAME Description, ... - IKEA Chile"
-        import re
 
         match = re.search(r"<title>([^<]+)</title>", resp.text)
         if match:
@@ -105,11 +115,17 @@ def fetch_product_name(item_no: str, country: str, language: str) -> str:
 # ── Stock check ───────────────────────────────────────────────────────────────
 
 
-def check_stock(item_no: str, country: str) -> dict | None:
+def check_stock(item_no: str, country: str) -> StockResult | None:
     """
-    Call IKEA's Ingka availability API.
-    Returns dict with: available (bool), stock (int), probability (str), restock_date (str|None)
-    Returns None on error.
+    Call IKEA's Ingka availability API and parse the response.
+
+    The API returns multiple entries:
+      - classUnitType "RU" (retail unit, e.g. "CL") = online/national availability
+      - classUnitType "STO" = individual store availability
+
+    Returns a dict with:
+      online_available (bool), online_status (str),
+      store_stock (int), store_restock_date (str|None), store_restock_qty (int)
     """
     url = AVAILABILITY_URL.format(country=country, item_no=item_no)
     headers = {
@@ -132,66 +148,56 @@ def check_stock(item_no: str, country: str) -> dict | None:
         console.print(f"[red]JSON parse error for {item_no}: {e}[/red]")
         return None
 
-    availabilities = data.get("availabilities", [])
-    if not availabilities:
-        return {
-            "available": False,
-            "stock": 0,
-            "probability": "UNKNOWN",
-            "restock_date": None,
-        }
+    online_available = False
+    online_status = "OUT_OF_STOCK"
+    store_stock = 0
+    store_restock_date = None
+    store_restock_qty = 0
 
-    # Aggregate across all entries (stores + online)
-    total_stock = 0
-    best_prob = "OUT_OF_STOCK"
-    restock_date = None
-
-    prob_rank = {
-        "HIGH_IN_STOCK": 3,
-        "MEDIUM_IN_STOCK": 2,
-        "LOW_IN_STOCK": 1,
-        "OUT_OF_STOCK": 0,
-    }
-
-    for entry in availabilities:
+    for entry in data.get("availabilities", []):
+        unit_type = entry.get("classUnitKey", {}).get("classUnitType", "")
         buying = entry.get("buyingOption", {})
 
-        # Online / home delivery
-        for key in ("homeDelivery", "cashCarry", "clickCollect"):
-            section = buying.get(key, {})
-            avail = section.get("availability", {})
-            qty = avail.get("quantity", 0) or 0
-            total_stock += qty
-
-            prob_obj = avail.get("probability", {})
-            # probability can be nested under "thisDay" or directly
-            msg_type = (
-                prob_obj.get("thisDay", {}).get("messageType")
-                or prob_obj.get("messageType")
-                or ""
+        if unit_type == "RU":
+            # National / online availability
+            hd = buying.get("homeDelivery", {})
+            avail = hd.get("availability", {})
+            msg = (
+                avail.get("probability", {})
+                .get("thisDay", {})
+                .get("messageType", "OUT_OF_STOCK")
             )
-            if prob_rank.get(msg_type, -1) > prob_rank.get(best_prob, 0):
-                best_prob = msg_type
+            online_status = msg
+            online_available = msg not in ("OUT_OF_STOCK",)
 
-            # Restock date
-            restocks = avail.get("restocks", [])
-            if restocks and not restock_date:
-                restock_date = restocks[0].get("earliestDate")
+        elif unit_type == "STO":
+            # Individual store — sum up quantities and collect earliest restock
+            cc = buying.get("cashCarry", {})
+            avail = cc.get("availability", {})
+            store_stock += avail.get("quantity", 0) or 0
+            for restock in avail.get("restocks", []):
+                date = restock.get("earliestDate")
+                qty = restock.get("quantity", 0) or 0
+                if date and (store_restock_date is None or date < store_restock_date):
+                    store_restock_date = date
+                    store_restock_qty = qty
 
-    available = total_stock > 0 or best_prob in ("HIGH_IN_STOCK", "MEDIUM_IN_STOCK")
+    available = online_available or store_stock > 0
 
-    return {
-        "available": available,
-        "stock": total_stock,
-        "probability": best_prob or "UNKNOWN",
-        "restock_date": restock_date,
-    }
+    return StockResult(
+        available=available,
+        online_available=online_available,
+        online_status=online_status,
+        store_stock=store_stock,
+        store_restock_date=store_restock_date,
+        store_restock_qty=store_restock_qty,
+    )
 
 
 # ── Telegram notification ─────────────────────────────────────────────────────
 
 
-def send_notification(item_no: str, result: dict):
+def send_notification(item_no: str, result: StockResult):
     token = CONFIG["telegram_token"]
     chat_id = CONFIG["telegram_chat_id"]
     if not token or not chat_id:
@@ -206,8 +212,14 @@ def send_notification(item_no: str, result: dict):
     msg = (
         f"🛒 *IKEA Chile — Product available!*\n\n"
         f"Article `{item_no}` is back in stock.\n"
-        f"Stock: *{result['stock']}* units\n"
-        f"Probability: *{result['probability']}*\n"
+        f"Online: *{'✅ Available' if result.online_available else '❌ Out of stock'}*\n"
+        f"Store stock: *{result.store_stock}* units\n"
+        + (
+            f"Restock expected: *{result.store_restock_date}* ({result.store_restock_qty} units)\n"
+            if result.store_restock_date
+            else ""
+        )
+        + ""
         f"[View on IKEA]({product_url})"
     )
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -268,10 +280,10 @@ def run(item_nos: list[str], interval: int):
         table = Table(title=f"Stock check — {now}", show_lines=True)
         table.add_column("Article", style="cyan", no_wrap=True)
         table.add_column("Description", style="dim")
-        table.add_column("Available", justify="center")
-        table.add_column("Stock", justify="right")
-        table.add_column("Probability")
+        table.add_column("Online", justify="center")
+        table.add_column("Store stock", justify="right")
         table.add_column("Restock date")
+        table.add_column("Restock qty", justify="right")
 
         for item_no in item_nos:
             description = product_names.get(item_no, item_no)
@@ -281,16 +293,22 @@ def run(item_nos: list[str], interval: int):
                 continue
 
             was_available = state.get(item_no, {}).get("available", False)
-            is_available = result["available"]
+            is_available = result.available
 
-            avail_str = "[green]✓ YES[/green]" if is_available else "[red]✗ NO[/red]"
+            online_str = (
+                "[green]✓ YES[/green]" if result.online_available else "[red]✗ NO[/red]"
+            )
+            restock_str = result.store_restock_date or "—"
+            restock_qty_str = (
+                str(result.store_restock_qty) if result.store_restock_date else "—"
+            )
             table.add_row(
                 item_no,
                 description,
-                avail_str,
-                str(result["stock"]),
-                result["probability"],
-                result.get("restock_date") or "—",
+                online_str,
+                str(result.store_stock),
+                restock_str,
+                restock_qty_str,
             )
 
             # Notify only on transition: out-of-stock → in-stock
@@ -348,11 +366,11 @@ if __name__ == "__main__":
         for item_no in args.item_nos:
             result = check_stock(item_no, CONFIG["country"])
             if result:
-                status = "IN STOCK" if result["available"] else "OUT OF STOCK"
+                status = "IN STOCK" if result.available else "OUT OF STOCK"
                 rprint(
-                    f"[bold]{item_no}[/bold]: {status} | stock={result['stock']} | prob={result['probability']}"
+                    f"[bold]{item_no}[/bold]: {status} | online={result.online_status} | store_stock={result.store_stock} | restock={result.store_restock_date}"
                 )
-                if result["available"]:
+                if result.available:
                     send_notification(item_no, result)
         sys.exit(0)
 
