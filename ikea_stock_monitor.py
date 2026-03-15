@@ -23,6 +23,7 @@ Usage:
     # Single check and exit (useful for cron):
     ./ikea_stock_monitor.py --once 30623912
 
+
 Configuration (edit the CONFIG section below or use env vars):
     IKEA_TELEGRAM_TOKEN   Telegram bot token
     IKEA_TELEGRAM_CHAT_ID Telegram chat ID
@@ -72,7 +73,10 @@ AVAILABILITY_URL = (
     "https://api.ingka.ikea.com/cia/availabilities/ru/{country}"
     "?itemNos={item_no}&expand=StoresList,Restocks"
 )
-INGKA_CLIENT_ID = "b6c117e5-ae61-4ef5-b4cc-e0b1e37f0631"
+# Extracted from the IKEA Chile website's network calls. It's a public client ID used for availability checks.
+# This is not a secret key, just an identifier for the IKEA website when calling the API.
+# Go to a product page, open dev tools, and look for the availability API call to find the current client ID if needed.
+INGKA_CLIENT_ID = "ef382663-a2a5-40d4-8afe-f0634821c0ed"
 
 PRODUCT_URL = "https://www.ikea.com/{country}/{lang}/p/-{item_no}/"
 STATE_FILE = Path.home() / ".ikea_stock_monitor_state.json"
@@ -89,31 +93,53 @@ class StockResult:
 
 
 # ── Product name lookup ───────────────────────────────────────────────────────
+def _get_product_name_from_html(html: str) -> str | None:
+    # Title format: "NAME Description, ... - IKEA Chile"
+    match = re.search(r"<title>([^<]+)</title>", html)
+    if match:
+        title = match.group(1).strip()
+        # Strip the trailing " - IKEA Chile" part
+        title = re.sub(r"\s*-\s*IKEA.*$", "", title).strip()
+        # Truncate at comma to keep it short
+        short = title.split(",")[0].strip()
+        return short or None
+    return None
 
 
 def fetch_product_name(item_no: str, country: str, language: str) -> str:
-    """Fallback: scrape the product name from the IKEA product page <title>."""
+    """Get product name from the slug in the 301 redirect URL.
+    Valid products redirect to /p/{slug}-{itemNo}/
+    Invalid products redirect to /cat/productos-products/
+
+    If product is valid
+    """
     url = f"https://www.ikea.com/{country}/{language}/p/-{item_no}/"
     try:
         resp = httpx.get(
             url,
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=15,
-            follow_redirects=True,
+            follow_redirects=False,
         )
-        # Title format: "NAME Description, ... - IKEA Chile"
+        location = resp.headers.get("location", "")
+        slug_match = re.search(r"/p/([a-z0-9-]+)-" + item_no + r"/", location)
+        if not slug_match:
+            return f"{item_no} (not found)"
 
-        match = re.search(r"<title>([^<]+)</title>", resp.text)
-        if match:
-            title = match.group(1).strip()
-            # Strip the trailing " - IKEA Chile" part
-            title = re.sub(r"\s*-\s*IKEA.*$", "", title).strip()
-            # Truncate at comma to keep it short
-            short = title.split(",")[0].strip()
-            return short or item_no
+        slug = slug_match.group(1).replace("-", " ").title()
+
+        # Get from the HTML of the product page (some products don't have a proper slug)
+        # if resp.status_code == 301:
+        #     resp = httpx.get(
+        #         location,
+        #         headers={"User-Agent": "Mozilla/5.0"},
+        #         timeout=15,
+        #     )
+
+        return _get_product_name_from_html(resp.text) or slug or item_no
+
     except Exception:
-        pass
-    return item_no
+        return item_no
 
 
 # ── Stock check ───────────────────────────────────────────────────────────────
@@ -126,10 +152,6 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
     The API returns multiple entries:
       - classUnitType "RU" (retail unit, e.g. "CL") = online/national availability
       - classUnitType "STO" = individual store availability
-
-    Returns a dict with:
-      online_available (bool), online_status (str),
-      store_stock (int), store_restock_date (str|None), store_restock_qty (int)
     """
     url = AVAILABILITY_URL.format(country=country, item_no=item_no)
     headers = {
@@ -213,26 +235,28 @@ def send_notification(item_no: str, result: StockResult):
     product_url = PRODUCT_URL.format(
         country=CONFIG["country"], lang=CONFIG["language"], item_no=item_no
     )
+    online = "✅ Available" if result.online_available else "❌ Out of stock"
+    restock_line = (
+        f"Restock expected: *{result.store_restock_date}* \\({result.store_restock_qty} units\\)\n"
+        if result.store_restock_date
+        else ""
+    )
     msg = (
-        f"🛒 *IKEA Chile — Product available!*\n\n"
-        f"Article `{item_no}` is back in stock.\n"
-        f"Online: *{'✅ Available' if result.online_available else '❌ Out of stock'}*\n"
+        f"🛒 *IKEA Chile — Product available\\!*\n\n"
+        f"Article `{item_no}` is back in stock\\.\n"
+        f"Online: *{online}*\n"
         f"Store stock: *{result.store_stock}* units\n"
-        + (
-            f"Restock expected: *{result.store_restock_date}* ({result.store_restock_qty} units)\n"
-            if result.store_restock_date
-            else ""
-        )
-        + ""
+        f"{restock_line}"
         f"[View on IKEA]({product_url})"
     )
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        httpx.post(
-            url,
-            json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
+        r = httpx.post(
+            api_url,
+            json={"chat_id": chat_id, "text": msg, "parse_mode": "MarkdownV2"},
             timeout=10,
         )
+        r.raise_for_status()
         console.print("[green]✓ Telegram notification sent.[/green]")
     except httpx.HTTPError as e:
         console.print(f"[red]Telegram error: {e}[/red]")
