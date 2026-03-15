@@ -38,6 +38,21 @@ Configuration (edit the CONFIG section below or use env vars):
 State:
     Persists to ~/.ikea_stock_monitor_state.json to track availability
     Used to detect product transitions and avoid duplicate notifications
+
+Changelog:
+    2026-03-15
+        • Added --file option to load products from JSON
+        • Added --test-telegram option to verify Telegram setup
+        • Enhanced documentation with setup instructions and features
+        • Improved function docstrings with detailed parameters and behavior
+    
+    2026-03-14
+        • Initial release
+        • Monitor IKEA Chile product availability via Telegram notifications
+        • Support for online (home delivery) and store (cash & carry) availability
+        • State persistence to avoid duplicate alerts
+        • Configurable check intervals
+        • Support for multiple products and custom article number formats
 """
 
 import argparse
