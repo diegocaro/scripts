@@ -204,14 +204,69 @@ def fetch_product(item_no: str, country: str, language: str) -> Product:
 # ── Stock check ───────────────────────────────────────────────────────────────
 
 
-def check_stock(product: Product, country: str) -> StockResult | None:
-    """
-    Call IKEA's Ingka availability API and parse the response.
+def parse_stock(data: dict) -> StockResult:
+    """Pure function: parse Ingka availability API response into a StockResult."""
+    entries = data.get("availabilities", [])
 
-    The API returns multiple entries:
-      - classUnitType "RU" (retail unit, e.g. "CL") = online/national availability
-      - classUnitType "STO" = individual store availability
-    """
+    ru_entries = [
+        e for e in entries if e.get("classUnitKey", {}).get("classUnitType") == "RU"
+    ]
+    sto_entries = [
+        e for e in entries if e.get("classUnitKey", {}).get("classUnitType") == "STO"
+    ]
+
+    # Online / national availability — take the first RU entry
+    online_status = next(
+        (
+            e.get("buyingOption", {})
+            .get("homeDelivery", {})
+            .get("availability", {})
+            .get("probability", {})
+            .get("thisDay", {})
+            .get("messageType", "OUT_OF_STOCK")
+            for e in ru_entries
+        ),
+        "OUT_OF_STOCK",
+    )
+    online_available = online_status not in ("OUT_OF_STOCK",)
+
+    # Store availability — sum quantities across all stores
+    store_stock = sum(
+        e.get("buyingOption", {})
+        .get("cashCarry", {})
+        .get("availability", {})
+        .get("quantity", 0)
+        or 0
+        for e in sto_entries
+    )
+
+    # Earliest restock across all stores
+    restocks = sorted(
+        (
+            (r["earliestDate"], r.get("quantity", 0) or 0)
+            for e in sto_entries
+            for r in e.get("buyingOption", {})
+            .get("cashCarry", {})
+            .get("availability", {})
+            .get("restocks", [])
+            if r.get("earliestDate")
+        ),
+        key=lambda t: t[0],
+    )
+    restock_date, restock_qty = restocks[0] if restocks else (None, 0)
+
+    return StockResult(
+        available=online_available or store_stock > 0,
+        online_available=online_available,
+        online_status=online_status,
+        store_stock=store_stock,
+        store_restock_date=restock_date,
+        store_restock_qty=restock_qty,
+    )
+
+
+def check_stock(product: Product, country: str) -> StockResult | None:
+    """Fetch availability from IKEA's Ingka API and parse the response."""
     url = AVAILABILITY_URL.format(country=country, item_no=product.item_no)
     headers = {
         "Accept": "application/json;version=2",
@@ -238,57 +293,15 @@ def check_stock(product: Product, country: str) -> StockResult | None:
         send_error_notification(product, error)
         return None
 
-    online_available = False
-    online_status = "OUT_OF_STOCK"
-    store_stock = 0
-    store_restock_date = None
-    store_restock_qty = 0
-
-    for entry in data.get("availabilities", []):
-        unit_type = entry.get("classUnitKey", {}).get("classUnitType", "")
-        buying = entry.get("buyingOption", {})
-
-        if unit_type == "RU":
-            # National / online availability
-            hd = buying.get("homeDelivery", {})
-            avail = hd.get("availability", {})
-            msg = (
-                avail.get("probability", {})
-                .get("thisDay", {})
-                .get("messageType", "OUT_OF_STOCK")
-            )
-            online_status = msg
-            online_available = msg not in ("OUT_OF_STOCK",)
-
-        elif unit_type == "STO":
-            # Individual store — sum up quantities and collect earliest restock
-            cc = buying.get("cashCarry", {})
-            avail = cc.get("availability", {})
-            store_stock += avail.get("quantity", 0) or 0
-            for restock in avail.get("restocks", []):
-                date = restock.get("earliestDate")
-                qty = restock.get("quantity", 0) or 0
-                if date and (store_restock_date is None or date < store_restock_date):
-                    store_restock_date = date
-                    store_restock_qty = qty
-
-    available = online_available or store_stock > 0
+    result = parse_stock(data)
     logger.info(
         "%s: online=%s store=%d available=%s",
         product.item_no,
-        online_status,
-        store_stock,
-        available,
+        result.online_status,
+        result.store_stock,
+        result.available,
     )
-
-    return StockResult(
-        available=available,
-        online_available=online_available,
-        online_status=online_status,
-        store_stock=store_stock,
-        store_restock_date=store_restock_date,
-        store_restock_qty=store_restock_qty,
-    )
+    return result
 
 
 # ── Telegram notification ─────────────────────────────────────────────────────
