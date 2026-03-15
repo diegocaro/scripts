@@ -24,5 +24,6 @@ All scripts use `uv` inline dependencies (I love them!).
    `uv` will automatically install the required dependencies on the first run.
 
 
+## Team
 
 ![One of the PR reviewers](assets/july-ascii.png)
