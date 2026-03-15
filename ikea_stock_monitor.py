@@ -207,16 +207,22 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
     try:
         resp = _fetch_url(url, headers=headers)
     except httpx.HTTPStatusError as e:
-        console.print(f"[red]HTTP error for {item_no}: {e}[/red]")
+        error = f"HTTP error: {e}"
+        console.print(f"[red]{error} for {item_no}[/red]")
+        send_error_notification(item_no, error)
         return None
     except httpx.HTTPError as e:
-        console.print(f"[red]Network error for {item_no} (after retries): {e}[/red]")
+        error = f"Network error (after retries): {e}"
+        console.print(f"[red]{error} for {item_no}[/red]")
+        send_error_notification(item_no, error)
         return None
 
     try:
         data = resp.json()
     except Exception as e:
-        console.print(f"[red]JSON parse error for {item_no}: {e}[/red]")
+        error = f"JSON parse error: {e}"
+        console.print(f"[red]{error} for {item_no}[/red]")
+        send_error_notification(item_no, error)
         return None
 
     online_available = False
@@ -273,6 +279,23 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
 
 
 # ── Telegram notification ─────────────────────────────────────────────────────
+
+
+def send_error_notification(item_no: str, error: str):
+    token = CONFIG["telegram_token"]
+    chat_id = CONFIG["telegram_chat_id"]
+    if not token or not chat_id:
+        return
+    msg = (
+        f"⚠️ *IKEA Chile — Error checking stock*\n\n"
+        f"Article `{item_no}`\n"
+        f"Error: {error}"
+    )
+    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        _send_telegram(api_url, chat_id, msg)
+    except httpx.HTTPError as e:
+        console.print(f"[red]Failed to send error notification via Telegram: {e}[/red]")
 
 
 def send_notification(item_no: str, result: StockResult):
