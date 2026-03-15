@@ -70,6 +70,36 @@ INGKA_CLIENT_ID = "b6c117e5-ae61-4ef5-b4cc-e0b1e37f0631"
 
 PRODUCT_URL = "https://www.ikea.com/{country}/{lang}/p/-{item_no}/"
 STATE_FILE = Path.home() / ".ikea_stock_monitor_state.json"
+PRODUCT_NAME_URL = "https://api.ingka.ikea.com/product/ingka/{country}/{item_no}"
+
+
+# ── Product name lookup ───────────────────────────────────────────────────────
+
+
+def fetch_product_name(item_no: str, country: str, language: str) -> str:
+    """Fallback: scrape the product name from the IKEA product page <title>."""
+    url = f"https://www.ikea.com/{country}/{language}/p/-{item_no}/"
+    try:
+        resp = httpx.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+            follow_redirects=True,
+        )
+        # Title format: "NAME Description, ... - IKEA Chile"
+        import re
+
+        match = re.search(r"<title>([^<]+)</title>", resp.text)
+        if match:
+            title = match.group(1).strip()
+            # Strip the trailing " - IKEA Chile" part
+            title = re.sub(r"\s*-\s*IKEA.*$", "", title).strip()
+            # Truncate at comma to keep it short
+            short = title.split(",")[0].strip()
+            return short or item_no
+    except Exception:
+        pass
+    return item_no
 
 
 # ── Stock check ───────────────────────────────────────────────────────────────
@@ -224,19 +254,30 @@ def run(item_nos: list[str], interval: int):
 
     state = load_state()
 
+    console.print("[dim]Fetching product names…[/dim]")
+    product_names = {
+        item_no: fetch_product_name(item_no, CONFIG["country"], CONFIG["language"])
+        for item_no in item_nos
+    }
+    for item_no, name in product_names.items():
+        console.print(f"  [cyan]{item_no}[/cyan] → {name}")
+    console.print()
+
     while True:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         table = Table(title=f"Stock check — {now}", show_lines=True)
         table.add_column("Article", style="cyan", no_wrap=True)
+        table.add_column("Description", style="dim")
         table.add_column("Available", justify="center")
         table.add_column("Stock", justify="right")
         table.add_column("Probability")
         table.add_column("Restock date")
 
         for item_no in item_nos:
+            description = product_names.get(item_no, item_no)
             result = check_stock(item_no, CONFIG["country"])
             if result is None:
-                table.add_row(item_no, "[red]Error[/red]", "-", "-", "-")
+                table.add_row(item_no, description, "[red]Error[/red]", "-", "-", "-")
                 continue
 
             was_available = state.get(item_no, {}).get("available", False)
@@ -245,6 +286,7 @@ def run(item_nos: list[str], interval: int):
             avail_str = "[green]✓ YES[/green]" if is_available else "[red]✗ NO[/red]"
             table.add_row(
                 item_no,
+                description,
                 avail_str,
                 str(result["stock"]),
                 result["probability"],
