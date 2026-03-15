@@ -18,16 +18,26 @@ Usage:
     chmod +x ikea_stock_monitor.py
     ./ikea_stock_monitor.py 10402841 40623913 ...
 
-    # Custom interval:
+    # Load products from JSON file:
+    ./ikea_stock_monitor.py --file products.json
+
+    # Custom interval (minutes):
     ./ikea_stock_monitor.py --interval 60 10402841
 
     # Single check and exit (useful for cron):
     ./ikea_stock_monitor.py --once 10402841
 
+    # Test Telegram integration:
+    ./ikea_stock_monitor.py --test-telegram
+
 
 Configuration (edit the CONFIG section below or use env vars):
     IKEA_TELEGRAM_TOKEN   Telegram bot token
     IKEA_TELEGRAM_CHAT_ID Telegram chat ID
+
+State:
+    Persists to ~/.ikea_stock_monitor_state.json to track availability
+    Used to detect product transitions and avoid duplicate notifications
 """
 
 import argparse
