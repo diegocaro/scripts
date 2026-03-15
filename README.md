@@ -10,9 +10,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project's philosophy and conventi
 
 ## Fun stuff
 
-| Script | Description |
-|--------|-------------|
-| [`ikea_stock_monitor.py`](ikea_stock_monitor.py) | Monitors IKEA Chile product availability and sends Telegram notifications when items are back in stock. Supports continuous monitoring and single-check mode (for cron). |
+| Script | Description | Screenshot |
+|--------|-------------|------------|
+| [`ikea_stock_monitor.py`](ikea_stock_monitor.py) | Monitors IKEA Chile product availability and sends Telegram notifications when items are back in stock. Supports continuous monitoring and single-check mode (for cron). | ![ikea_stock_monitor screenshot](screenshots/ikea_stock_monitor.png) |
 
 ## How to run the scripts
 
