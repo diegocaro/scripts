@@ -32,6 +32,7 @@ Configuration (edit the CONFIG section below or use env vars):
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -73,6 +74,7 @@ CONFIG = {
 # ──────────────────────────────────────────────
 
 console = Console()
+logger = logging.getLogger("ikea_stock_monitor")
 
 # Ingka availability API — the same one the IKEA website calls.
 # "ru" in the path stands for "retail unit" (not Russia), it's a fixed path segment.
@@ -99,6 +101,25 @@ class StockResult:
     store_restock_qty: int
 
 
+def _log_request(request: httpx.Request):
+    logger.debug("→ %s %s", request.method, request.url)
+
+
+def _log_response(response: httpx.Response):
+    logger.debug(
+        "← %s %s (%s)",
+        response.status_code,
+        response.url,
+        response.headers.get("content-type", ""),
+    )
+
+
+_http_client = httpx.Client(
+    timeout=15,
+    event_hooks={"request": [_log_request], "response": [_log_response]},
+)
+
+
 @retry(
     retry=retry_if_exception_type(httpx.HTTPError),
     stop=stop_after_attempt(3),
@@ -108,8 +129,11 @@ class StockResult:
 def _fetch_url(
     url: str, *, headers: dict | None = None, follow_redirects: bool = True, **kwargs
 ) -> httpx.Response:
-    resp = httpx.get(
-        url, headers=headers, follow_redirects=follow_redirects, timeout=15, **kwargs
+    resp = _http_client.get(
+        url,
+        headers=headers,
+        follow_redirects=follow_redirects,
+        **kwargs,
     )
     if not resp.is_redirect:
         resp.raise_for_status()
@@ -143,6 +167,7 @@ def fetch_product_name(item_no: str, country: str, language: str) -> str:
             follow_redirects=False,
         )
     except httpx.HTTPError:
+        logger.info("Failed to fetch product page for %s", item_no)
         return item_no
 
     location = resp.headers.get("location", "")
@@ -229,6 +254,13 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
                     store_restock_qty = qty
 
     available = online_available or store_stock > 0
+    logger.info(
+        "%s: online=%s store=%d available=%s",
+        item_no,
+        online_status,
+        store_stock,
+        available,
+    )
 
     return StockResult(
         available=available,
@@ -298,7 +330,9 @@ def _send_telegram(api_url: str, chat_id: str, text: str):
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text())
+            state = json.loads(STATE_FILE.read_text())
+            logger.info("Loaded state with %d items", len(state))
+            return state
         except Exception:
             pass
     return {}
@@ -371,6 +405,7 @@ def run(item_nos: list[str], interval: int):
 
             # Notify only on transition: out-of-stock → in-stock
             if is_available and not was_available:
+                logger.info("Transition for %s: unavailable → available", item_no)
                 console.print(
                     f"\n[bold green]🎉 {item_no} is now available! Sending Telegram message…[/bold green]"
                 )
@@ -442,11 +477,33 @@ def parse_args():
         action="store_true",
         help="Run a single check and exit (useful for cron jobs)",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show extra info (stock parse results, state transitions)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (implies --verbose, shows HTTP requests/responses)",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.debug:
+        level = logging.DEBUG
+    elif args.verbose:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     if args.once:
         run_once(args.item_nos)
