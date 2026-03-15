@@ -552,6 +552,10 @@ def test_telegram():
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
+def clean_item_no(s: str | int) -> str:
+    return str(s).replace(".", "").strip()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Monitor IKEA Chile product availability and get notified via Telegram.",
@@ -562,7 +566,7 @@ def parse_args():
         "item_nos",
         nargs="*",
         metavar="ITEM_NO",
-        type=lambda s: s.replace(".", ""),
+        type=clean_item_no,
         help="One or more IKEA article numbers (e.g. 10402841 or 104.028.41)",
     )
     parser.add_argument(
@@ -625,7 +629,7 @@ if __name__ == "__main__":
     if args.file:
         try:
             data = json.loads(args.file.read_text())
-            item_nos.extend(str(n).replace(".", "") for n in data)
+            item_nos.extend(clean_item_no(n) for n in data)
         except (json.JSONDecodeError, OSError) as e:
             err_console.print(f"[red]Error reading {args.file}: {e}[/red]")
             sys.exit(1)
