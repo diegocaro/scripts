@@ -5,6 +5,7 @@
 #   "httpx",
 #   "python-dotenv",
 #   "rich",
+#   "tenacity",
 # ]
 # ///
 """
@@ -45,6 +46,12 @@ from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 load_dotenv()
 
@@ -92,6 +99,23 @@ class StockResult:
     store_restock_qty: int
 
 
+@retry(
+    retry=retry_if_exception_type(httpx.HTTPError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential_jitter(initial=1, max=10),
+    reraise=True,
+)
+def _fetch_url(
+    url: str, *, headers: dict | None = None, follow_redirects: bool = True, **kwargs
+) -> httpx.Response:
+    resp = httpx.get(
+        url, headers=headers, follow_redirects=follow_redirects, timeout=15, **kwargs
+    )
+    if not resp.is_redirect:
+        resp.raise_for_status()
+    return resp
+
+
 # ── Product name lookup ───────────────────────────────────────────────────────
 def _get_product_name_from_html(html: str) -> str | None:
     # Title format: "NAME Description, ... - IKEA Chile"
@@ -110,36 +134,33 @@ def fetch_product_name(item_no: str, country: str, language: str) -> str:
     """Get product name from the slug in the 301 redirect URL.
     Valid products redirect to /p/{slug}-{itemNo}/
     Invalid products redirect to /cat/productos-products/
-
-    If product is valid
     """
     url = f"https://www.ikea.com/{country}/{language}/p/-{item_no}/"
     try:
-        resp = httpx.get(
+        resp = _fetch_url(
             url,
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15,
             follow_redirects=False,
         )
-        location = resp.headers.get("location", "")
-        slug_match = re.search(r"/p/([a-z0-9-]+)-" + item_no + r"/", location)
-        if not slug_match:
-            return f"{item_no} (not found)"
-
-        slug = slug_match.group(1).replace("-", " ").title()
-
-        # Get from the HTML of the product page (some products don't have a proper slug)
-        # if resp.status_code == 301:
-        #     resp = httpx.get(
-        #         location,
-        #         headers={"User-Agent": "Mozilla/5.0"},
-        #         timeout=15,
-        #     )
-
-        return _get_product_name_from_html(resp.text) or slug or item_no
-
-    except Exception:
+    except httpx.HTTPError:
         return item_no
+
+    location = resp.headers.get("location", "")
+    slug_match = re.search(r"/p/([a-z0-9-]+)-" + item_no + r"/", location)
+    if not slug_match:
+        return f"{item_no} (not found)"
+
+    slug = slug_match.group(1).replace("-", " ").title()
+
+    # Get from the HTML of the product page (some products don't have a proper slug)
+    # if resp.status_code == 301:
+    #     resp = httpx.get(
+    #         location,
+    #         headers={"User-Agent": "Mozilla/5.0"},
+    #         timeout=15,
+    #     )
+
+    return _get_product_name_from_html(resp.text) or slug or item_no
 
 
 # ── Stock check ───────────────────────────────────────────────────────────────
@@ -159,13 +180,12 @@ def check_stock(item_no: str, country: str) -> StockResult | None:
         "X-Client-ID": INGKA_CLIENT_ID,
     }
     try:
-        resp = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
-        resp.raise_for_status()
+        resp = _fetch_url(url, headers=headers)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]HTTP error for {item_no}: {e}[/red]")
         return None
     except httpx.HTTPError as e:
-        console.print(f"[red]Network error for {item_no}: {e}[/red]")
+        console.print(f"[red]Network error for {item_no} (after retries): {e}[/red]")
         return None
 
     try:
@@ -251,15 +271,25 @@ def send_notification(item_no: str, result: StockResult):
     )
     api_url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        r = httpx.post(
-            api_url,
-            json={"chat_id": chat_id, "text": msg, "parse_mode": "MarkdownV2"},
-            timeout=10,
-        )
-        r.raise_for_status()
+        _send_telegram(api_url, chat_id, msg)
         console.print("[green]✓ Telegram notification sent.[/green]")
     except httpx.HTTPError as e:
-        console.print(f"[red]Telegram error: {e}[/red]")
+        console.print(f"[red]Telegram error (after retries): {e}[/red]")
+
+
+@retry(
+    retry=retry_if_exception_type(httpx.HTTPError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential_jitter(initial=1, max=10),
+    reraise=True,
+)
+def _send_telegram(api_url: str, chat_id: str, text: str):
+    r = httpx.post(
+        api_url,
+        json={"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"},
+        timeout=10,
+    )
+    r.raise_for_status()
 
 
 # ── State persistence (avoid duplicate notifications) ────────────────────────
